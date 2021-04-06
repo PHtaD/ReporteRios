@@ -1,0 +1,272 @@
+---
+title: "Nivel actual de ríos en México"
+author: "Por Rodrigo Tanco y Pedro Huerta"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+
+---
+
+```{r, include=FALSE}
+
+cat("\014")
+rm(list=ls())
+
+library(leaflet)
+library(leaflet.extras)
+library(readr)
+library(RColorBrewer)
+library(rgdal)
+library(shiny)
+library(plotly)
+library(ggthemes)
+library(reactable)
+library(prettydoc)
+library(lubridate)
+library(tidyr)
+#library(mxmaps)
+library(dplyr)
+
+
+# Importar datos de CSV
+# https://datos.gob.mx/busca/dataset/niveles-actuales-de-rios
+
+NIVEL_RIOS_DIA <- read_csv("NIVEL_RIOS_DIA_06042021.csv", 
+                           col_types = cols(fecha = col_datetime(format = "%Y/%m/%d %H:%M:%S")))
+
+CATALOGO_SIH <- read_csv("CATALOGO_SIH_Mod.csv")
+
+# Compendio de datos
+All_Data = merge(NIVEL_RIOS_DIA, CATALOGO_SIH, by.x = "estacionID", by.y =  "estacion", all.x = TRUE)
+
+meses<-c("Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre")
+
+
+#mex <-c("Aguascalientes", "Baja California", "Baja California Sur", "Campeche", "Chiapas", "Chihuahua", "Coahuila", "Colima", "Distrito Federal", "Durango", "Guanajuato", "Guerrero", "Hidalgo", "Jalisco", "México", "Michoacán", "Morelos", "Nayarit", "Nuevo León", "Oaxaca", "Puebla", "Querétaro", "Quintana Roo", "San Luis Potosí", "Sinaloa", "Sonora", "Tabasco", "Tamaulipas", "Tlaxcala", "Veracruz", "Yucatán", "Zacatecas")
+
+#Nivel promedio por estados
+All_Data_Por_Estados <- All_Data %>% separate(nombre, c("nombre", "estado"), sep = ",")
+All_Data_Por_Estados <- All_Data_Por_Estados[is.na(All_Data_Por_Estados$estado)==FALSE,] %>% 
+  select(nivel, estado) %>% group_by(estado) %>% summarise(nivel_promedio=mean(nivel)) %>% ungroup() %>% arrange((nivel_promedio)) %>%
+  mutate(est = case_when(estado==" Ags." ~ "Aguascalientes",
+                         estado==" B.C." ~ "Baja California",
+                         estado==" B.C.S." ~ "Baja California Sur",
+                         estado==" Camp." ~ "Campeche",
+                         estado==" Chih." ~ "Chihuahua",
+                         estado==" Chis." ~ "Chiapas",
+                         estado==" Coah." ~ "Coahuila",
+                         estado==" Col." ~ "Colima",
+                         estado==" Cd. de Méx." ~ "Distrito Federal",
+                         estado==" Dgo." ~ "Durango",
+                         estado==" Gto." ~ "Guanajuato",
+                         estado==" Gro." ~ "Guerrero",
+                         estado==" Hgo." ~ "Hidalgo",
+                         estado==" Jal." ~ "Jalisco",
+                         estado==" Méx." ~ "México",
+                         estado==" Mich." ~ "Michoacán",
+                         estado==" Mor." ~ "Morelos",
+                         estado==" N.L." ~ "Nuevo León",
+                         estado==" Nay." ~ "Nayarit",
+                         estado==" Oax." ~ "Oaxaca",
+                         estado==" Pue." ~ "Puebla",
+                         estado==" Qro." ~ "Querétaro",
+                         estado==" Q. Roo" ~ "Quintana Roo",
+                         estado==" S.L.P." ~ "San Luis Potosí",
+                         estado==" Sin." ~ "Sinaloa",
+                         estado==" Son." ~ "Sonora",
+                         estado==" Tab." ~ "Tabasco",
+                         estado==" Tamps." ~ "Tamaulipas",
+                         estado==" Tlax." ~ "Tlaxcala",
+                         estado==" Ver." ~ "Veracruz",
+                         estado==" Yuc." ~ "Yucatán",
+                         estado==" Zac." ~ "Zacatecas"))
+
+tmp <- tempdir()
+#url <- "http://personal.tcu.edu/kylewalker/data/mexico.zip"
+#file <- basename(url)
+#download.file(url, file)
+#unzip(file, exdir = tmp)
+unzip("mexico.zip", exdir = tmp)
+mexico <- readOGR(dsn = tmp, layer = "mexico", encoding = "UTF-8")
+
+mexico$gdp08 <- 0
+
+for (i in 1:length(All_Data_Por_Estados$est)){
+  for (j in 1:length(mexico$name)) {
+    if (mexico$name[j] == All_Data_Por_Estados$est[i]){
+      mexico$gdp08[j] <- All_Data_Por_Estados$nivel_promedio[i]
+    }
+  }
+}
+
+#mexico$name[9] <- factor("Ciudad de México")
+
+state_popup <- paste0("<strong>Estado: </strong>", 
+                      mexico$name, 
+                      "<br><strong>Nivel promedio de ríos: </strong>", 
+                      mexico$gdp08)
+
+
+#Rios sin nivel registrado
+All_Data_nivel0 <- All_Data[!(All_Data$nivel>0),] %>% arrange((nivel))
+
+#Rios con nivel registrado
+All_Data_nivelp <- All_Data[!(All_Data$nivel==0),] %>% arrange((nivel))
+
+pal <- colorNumeric(palette = "RdYlBu" , domain = All_Data_nivelp$nivel, na.color = NA, reverse = TRUE )
+palEst <- colorNumeric(palette = "Greens" , domain = mexico$gdp08, na.color = NA, reverse = FALSE )
+
+
+Mapa1 <- leaflet(data = mexico) %>%
+  addProviderTiles(provider = "Esri.WorldTopoMap", group = "Topografía") %>%
+  addProviderTiles("CartoDB.Positron", group = "Nivel promedio por Entidades") %>%
+  addPolygons(fillColor = ~palEst(mexico$gdp08), 
+              fillOpacity = 0.8, 
+              color = "#BDBDC3", 
+              weight = 1, 
+              popup = state_popup,
+              group = "Nivel promedio por Entidades") %>%
+  addLegend(pal = palEst, values = mexico$gdp08, opacity = 0.7, title = "Nivel promedio por Entidades",
+            position = "bottomleft", group = "Nivel promedio por Entidades") %>%
+  fitBounds(
+    lng1 = -118.44, lat1 = 32.64,
+    lng2 = -86.7, lat2 = 14.53) %>%
+  addCircleMarkers(lng = All_Data_nivelp$longitud, lat = All_Data_nivelp$latitud, 
+                   radius = 3, color = pal(All_Data_nivelp$nivel),
+                   popup =  paste0("Estación: ", All_Data_nivelp$estacionID, " Nivel = ", All_Data_nivelp$nivel),
+                   group = "Nivel de ríos registrado") %>%
+  addLegend("bottomright", pal = pal, values = All_Data_nivelp$nivel, title = "Nivel de Ríos", opacity = 1, group = "Nivel de ríos registrado") %>%
+  addCircleMarkers(lng = All_Data_nivel0$longitud, lat = All_Data_nivel0$latitud, 
+                   radius = 3, color = "black",
+                   popup =  paste0("Estación: ", All_Data_nivel0$estacionID),
+                   group = "Est. hidrométricas con nivel cero") %>%
+  #  addSearchOSM() %>%
+  #  addReverseSearchOSM() %>%
+  addResetMapButton() %>%
+  addLayersControl(
+    baseGroups = c("Nivel promedio por Entidades", "Topografía"),
+    overlayGroups = c("Nivel de ríos registrado", "Est. hidrométricas con nivel cero"),
+    options = layersControlOptions(collapsed = FALSE )
+  )
+
+```
+
+<center>
+
+### Los datos mostrados en este reporte corresponden al `r day(All_Data$fecha[1])` de `r meses[month(All_Data$fecha[1])]` del año `r year(All_Data$fecha[1])` obtenidos de la Comisión Nacional del Agua ( [CONAGUA](https://datos.gob.mx/busca/dataset/niveles-actuales-de-rios) ). ^[Fuente: Datos Abiertos <https://datos.gob.mx/busca/dataset/niveles-actuales-de-rios>]
+
+Las estaciones hidrométricas miden la cantidad de agua que fluye a través de ríos, canales, tuberías y salidas de presas, permitiendo informar la cantidad disponible del recurso. ^[Fuente: Atlas del Agua en México 2016  <http://201.116.60.25/publicaciones/AAM_2016.pdf>]
+
+De los ríos proviene el abastecimiento del agua potable para municipios e industrias, la generación de energía hidroeléctrica, el riego de cultivos, actividades recreativas, el control de avenidas y la preservación de ecosistemas; por ende, es de vital importancia conocer la cantidad de agua en ellos. ^[Fuente: Viessman  et ál. 1989]
+
+En el siguiente mapa se muestra información correspondiente al nivel de los ríos, de acuerdo con la medición de las estaciones hidrométricas de la CONAGUA.
+
+```{r, echo = FALSE}
+# Imprimir el mapa
+Mapa1
+
+```
+
+Mediante puntos de colores se exhibe la localización de cada una de las estaciones hidrométricas, y el color corresponde al nivel registrado en ellas, yendo desde el azul (niveles cercanos a cero) hasta el rojo, evidenciando ríos con un caudal grande que pueden presentar algún riesgo de desbordamiento; ver escala cromática en la esquina inferior derecha del mapa. 
+
+Existen mediciones cuyo valor es equivalente a cero. Dado a que éste registro puede interpretarse de diferentes formas, los puntos indicadores sobre el mapa están de color negro. Las mediciones en cero pueden sugerir: que el río tiene un nivel menor al que se estableció como base, que no existe una medición correspondiente a la fecha del registro o, que en efecto, se encuentra a cero unidades de altura.
+
+La visualización de los puntos se puede desactivar con los incisos del recuadro superior derecho en el mapa.
+
+Para mostrar el nivel promedio de ríos en las entidades federativas, el área de los estados adquiere un color verde cuya intensidad exhibe de menor a mayor la altura promedio del caudal registrado; ver escala cromática en la esquina inferior izquierda del mapa.
+
+Tanto los estados como los puntos responden al dar click con el cursor, mostrando puntualmente la medición seleccionada.
+
+Con las opciones del cuadro en la esquina superior derecha del mapa, se puede cambiar entre la vista que proporciona el nivel promedio por entidad federativa y una vista que muestra la topografía del país, permitiendo identificar la geografía que rodea a las estaciones de monitoreo.
+
+A continuación, se tienen dos gráficas. En una se muestran las estaciones hidrométricas con el mayor nivel de agua, permitiendo enfatizar en el monitoreo de los ríos para dichas estaciones con la finalidad de tomar la debidas precauciones en caso de algún posible desbordamiento. En la segunda gráfica, se tiene de mayor a menor el nivel promedio de los ríos por entidad federativa, identificando aquellas que posen mayor disponibilidad del recurso.
+
+
+```{r, echo = FALSE, error= FALSE }
+# Grafica comparativa
+
+All_Data_plot1 <- All_Data[order(All_Data$nivel, na.last = TRUE, decreasing = TRUE),] %>% head(15)
+
+graficaBarras1 <- All_Data_plot1 %>% ggplot() + 
+  aes(x = reorder(estacionID, nivel), y = nivel) +
+  geom_bar(stat="identity", fill= "red")+ coord_flip()+
+  labs(title="Estaciones hidrométricas con registros más altos" ,subtitle = "", x="ID de estación") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1))
+
+ggplotly(graficaBarras1)
+
+```
+
+<br>
+
+```{r, echo = FALSE, warning= FALSE}
+# Grafica comparativa por estados
+
+All_Data_Por_Estados <- All_Data %>% separate(nombre, c("nombre", "estado"), sep = ",")
+
+All_Data_Por_Estados <- All_Data_Por_Estados[is.na(All_Data_Por_Estados$estado)==FALSE,] %>% 
+  select(nivel, estado) %>% group_by(estado) %>% summarise(nivel_promedio=mean(nivel)) %>% ungroup() %>% arrange((nivel_promedio))
+
+
+graficaBarrasEstados <- All_Data_Por_Estados %>% ggplot() + 
+  aes(x = reorder(estado, nivel_promedio), y = nivel_promedio) +
+  geom_bar(stat="identity", fill= "blue")+ coord_flip()+
+  labs(title="Comparativa entre estados de la república" ,subtitle = "", x="Estado") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=1))
+
+ggplotly(graficaBarrasEstados)
+
+```
+
+Agrupando por estados, se tiene la comparación del nivel registrado en cada una de las estaciones  hidrométricas. Esta visualización permite conocer la dispersión de las mediciones, corroborando si el nivel promedio mostrado en el mapa y en la gráfica previa son una tendencia en toda la entidad federativa o es resultado de mediciones muy variadas. Dar click en algún punto para ver el valor del nivel y el ID de la estación.
+
+```{r, echo = FALSE, warning= FALSE, message= FALSE }
+# Grafica comparativa por estados
+
+All_Data_Por_Estados <- All_Data %>% separate(nombre, c("nombre", "estado"), sep = ",")
+
+All_Data_Por_Estados <- All_Data_Por_Estados[is.na(All_Data_Por_Estados$estado)==FALSE,] %>% 
+  select(estacionID, nivel, estado) 
+
+graficaPorEstados <- All_Data_Por_Estados %>% ggplot() + 
+  aes(x = estacionID, y = nivel) +
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) +
+  geom_jitter(alpha=0.5)+ 
+  geom_smooth(method = "lm")+
+  labs(title="Estaciones hidrométricas por estado") +
+  facet_wrap(estado ~ .)
+
+ggplotly(graficaPorEstados)
+
+```
+
+Por último, está la tabla que contiene los datos de todas las estaciones hidrométricas. Para facilitar alguna consulta en ésta, auxiliarse del ordenamiento de cada columna al dar click sobre el título de interés o utilizar el buscador para identificar el elemento deseado.  
+
+```{r, echo = FALSE}
+
+# Rectable
+
+All_Data_Table <-  All_Data %>%
+  select(estacionID, nivel, nombre, latitud, longitud)
+
+names(All_Data_Table) <-c("ID de Estación", "Nivel", "Ubicación", "Latitud", "Longitud")
+
+BuYlRd <- function(x) rgb(colorRamp(c("blue", "yellow", "red"))(x), maxColorValue = 255)
+
+reactable(All_Data_Table, defaultPageSize = 10, searchable = TRUE, resizable = TRUE, showPageSizeOptions = TRUE, defaultColDef = colDef(footerStyle = list(fontWeight = "bold")), columns = list(Nivel = colDef(style = function(value) {if (!is.numeric(value)) return()
+  normalized <- (value - min(All_Data_Table$Nivel)) / (max(All_Data_Table$Nivel) - min(All_Data_Table$Nivel))
+  color <- BuYlRd(normalized)
+  list(color = color, fontWeight = "bold" )
+}) ))
+
+
+```
+
+<br>
+
+
+
+</center>
+
